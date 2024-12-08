@@ -11,7 +11,7 @@ pub struct Vertex {
 implement_vertex!(Vertex, position, tex_coords);
 
 #[derive(Debug, EnumIter, PartialEq)]
-enum FaceDir {
+pub enum FaceDir {
     Up,
     Down,
     Left,
@@ -62,24 +62,45 @@ impl FaceDir {
 }
 
 pub struct Block {
-    pub vertices: Vec<Vertex>,
-    pub indices: Vec<u32>,
-}
+    pub block_type: BlockType,
+    pub pos: [f32; 3],
+} 
+
+#[derive(PartialEq)]
+pub enum BlockType {
+        Air,
+        TNT,
+    }
 
 impl Block {
+   
+
     pub fn new(pos: [f32; 3]) -> Self {
-        let mut vertices = Vec::new();
-        let mut indices = Vec::new();
-        let base_pos = Vec3::from(pos);
-        
-        // Generate faces for all directions
-        for face_dir in FaceDir::iter() {
-            //if face_dir == FaceDir::Front || face_dir == FaceDir::Back {
-                Self::add_face(&mut vertices, &mut indices, base_pos, face_dir);
-            //}
+        let block_type: BlockType;
+
+        if pos[1] > 0.0 { // y limit for now
+            block_type = BlockType::Air;
+        } else {
+            block_type = BlockType::TNT;
         }
         
-        Block { vertices, indices }
+        Block { block_type, pos}
+    }
+
+    pub fn generate_faces(&self, faces: Vec<FaceDir>) -> (Vec<Vertex>, Vec<u32>) {
+        let base_pos = Vec3::from(self.pos);
+        let mut vertices: Vec<Vertex> = Vec::new();
+        let mut indices: Vec<u32> = Vec::new();
+
+        if self.block_type == BlockType::Air {
+            return (vertices, indices)
+        }
+
+        for face in faces {
+            Self::add_face(&mut vertices, &mut indices, base_pos, face);
+        }
+
+        (vertices, indices)
     }
 
     fn add_face(vertices: &mut Vec<Vertex>, indices: &mut Vec<u32>, base_pos: Vec3, face_dir: FaceDir) {

@@ -2,12 +2,15 @@
 extern crate glium;
 use std::{collections::HashSet, time::Instant};
 
-use glium::{winit::{event::{ElementState, Event, WindowEvent}, event_loop::ActiveEventLoop, keyboard::{KeyCode, PhysicalKey}}, Surface};
-use nalgebra_glm::{self, cross, look_at, normalize, Mat4, Vec3};
+use glium::{winit::event::{ElementState, Event, WindowEvent}, IndexBuffer, Surface, VertexBuffer};
+use nalgebra_glm::{self, Vec3};
 mod block;
-use block::Block;
+use block::{Block, Vertex};
 mod player;
 use player::Player;
+mod chunk_manager;
+mod chunk;
+use chunk_manager::ChunkManager;
 
 fn main() {
 
@@ -72,6 +75,12 @@ fn main() {
 
     let mut player = Player::new(Vec3::new(0.0, 0.0, 0.0));
 
+    let mut vertex_buffer: Option<VertexBuffer<Vertex>> = None;
+    let mut index_buffer: Option<IndexBuffer<u32>> = None;
+    let mut chunk_manager = ChunkManager::new();
+    let mut last_chunk_pos: [i32; 3] = player.chunk_pos;
+
+    chunk_manager.update_chunks(player.position);
     let _ = event_loop.run(move |event, window_target| {
         match event { 
             Event::WindowEvent { event, .. } => match event {
@@ -92,40 +101,18 @@ fn main() {
                         delta_time
                     );
 
-                    
-                    let mut blocks = Vec::new();
-                    for x in 0..3 {
-                        for y in 0..3 {
-                            for z in 0..3 {
-                                blocks.push(Block::new([x as f32, y as f32, z as f32]));
-                            }
-                        }
-                    }
-                    
-                    // Combine vertices and indices from all blocks
-                    let mut combined_vertices = Vec::new();
-                    let mut combined_indices = Vec::new();
-                    let mut vertex_offset = 0;
 
-                    for block in &blocks {
-                        // Add this block's vertices to the combined list
-                        combined_vertices.extend_from_slice(&block.vertices);
-                        
-                        // Add this block's indices to the combined list, with offset
-                        for &index in &block.indices {
-                            combined_indices.push(index + vertex_offset);
-                        }
-                        
-                        // Update the offset for the next block
-                        vertex_offset += block.vertices.len() as u32;
+                    if vertex_buffer.is_none() || index_buffer.is_none() || player.chunk_pos != last_chunk_pos {
+                        last_chunk_pos = player.chunk_pos;
+                        chunk_manager.update_chunks(player.position);
+                        let (vertices, indices) = chunk_manager.get_buffers();
+                        vertex_buffer = Some(glium::VertexBuffer::new(&display, &vertices).unwrap());
+                        index_buffer = Some(glium::IndexBuffer::new(
+                            &display,
+                            glium::index::PrimitiveType::TrianglesList,
+                            &indices
+                        ).unwrap());
                     }
-
-                    let vertex_buffer = glium::VertexBuffer::new(&display, &combined_vertices).unwrap();
-                    let index_buffer = glium::IndexBuffer::new(
-                        &display, 
-                        glium::index::PrimitiveType::TrianglesList,
-                        &combined_indices
-                    ).unwrap();
 
                     let mut target = display.draw();
 
@@ -145,8 +132,8 @@ fn main() {
                     // projection: [[f32; 4]; 4] = nalgebra_glm::Mat4::identity().into();
                     target.clear_color_and_depth((0.0, 0.0, 0.0, 1.0), 1.0);
                     target.draw(
-                        &vertex_buffer,
-                        &index_buffer,
+                        vertex_buffer.as_ref().unwrap(),
+                        index_buffer.as_ref().unwrap(),
                         &program,
                         &uniform! {
                             model: model,
@@ -159,7 +146,7 @@ fn main() {
 
                     target.finish().unwrap();
                 },
-                WindowEvent::KeyboardInput {  device_id, event, is_synthetic } => {
+                WindowEvent::KeyboardInput {  device_id, event, is_synthetic  } => {
                     match event.state {
                         ElementState::Pressed => {
                             keys_pressed.insert(event.physical_key);
