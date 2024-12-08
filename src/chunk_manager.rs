@@ -16,7 +16,7 @@ impl ChunkManager {
     pub fn update_chunks(&mut self, position: Vec3) {
         let mut new_chunks = HashMap::new();
         let chunk_size: i32 = 16;
-        let render_distance: i32 = 2;
+        let render_distance: i32 = 1;
         
         let user_chunk_pos = ChunkManager::get_chunk_at(position.into());
 
@@ -63,11 +63,11 @@ impl ChunkManager {
 
     fn should_render_face(&self, neighbor_pos: [i32; 3]) -> bool {
         if let Some(neighbor) = self.get_block(neighbor_pos) {
-            neighbor.block_type == BlockType::Air
+             neighbor.block_type == BlockType::Air
         } else {
             // Convert i32 array to f32 array manually
             let pos_f32 = [neighbor_pos[0] as f32, neighbor_pos[1] as f32, neighbor_pos[2] as f32];
-            println!("Neighbor Position: {:?}, Neighbor Chunk: {:?}", neighbor_pos, ChunkManager::get_chunk_at(pos_f32));
+            //println!("Neighbor Position: {:?}, Neighbor Chunk: {:?}", neighbor_pos, ChunkManager::get_chunk_at(pos_f32));
             true
         }
     }
@@ -95,27 +95,27 @@ impl ChunkManager {
                         let mut faces_to_render = Vec::new();
                         
                         // Up face
-                        if self.should_render_face( [world_x, world_y + 1, world_z]) {
+                        if self.should_render_face( [world_x, world_y - 1, world_z]) {
                             faces_to_render.push(FaceDir::Up);
                         }
                         // Down face
-                        if self.should_render_face( [world_x, world_y - 1, world_z]) {
+                        if self.should_render_face( [world_x, world_y + 1, world_z]) {
                             faces_to_render.push(FaceDir::Down);
                         }
                         // Right face
                         if self.should_render_face( [world_x + 1, world_y, world_z]) {
-                            faces_to_render.push(FaceDir::Right);
+                            faces_to_render.push(FaceDir::Left);
                         }
                         // Left face
                         if self.should_render_face([world_x - 1, world_y, world_z]) {
-                            faces_to_render.push(FaceDir::Left);
+                            faces_to_render.push(FaceDir::Right);
                         }
                         // Front face
-                        if self.should_render_face( [world_x, world_y, world_z - 1]) {
+                        if self.should_render_face( [world_x, world_y, world_z + 1]) {
                             faces_to_render.push(FaceDir::Front);
                         }
                         // Back face
-                        if self.should_render_face( [world_x, world_y, world_z + 1]) {
+                        if self.should_render_face( [world_x, world_y, world_z - 1]) {
                             faces_to_render.push(FaceDir::Back);
                         }
 

@@ -104,7 +104,7 @@ fn main() {
 
                     if vertex_buffer.is_none() || index_buffer.is_none() || player.chunk_pos != last_chunk_pos {
                         last_chunk_pos = player.chunk_pos;
-                        chunk_manager.update_chunks(player.position);
+                        // chunk_manager.update_chunks(player.position);
                         let (vertices, indices) = chunk_manager.get_buffers();
                         vertex_buffer = Some(glium::VertexBuffer::new(&display, &vertices).unwrap());
                         index_buffer = Some(glium::IndexBuffer::new(

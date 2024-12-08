@@ -69,6 +69,7 @@ impl Player
         // update chunk position
         self.chunk_pos = ChunkManager::get_chunk_at(self.position.into());
 
+        println!("Position: {:?}", self.position);
         // Escape
         if keys_pressed.contains(&PhysicalKey::Code(KeyCode::Escape)) {
             window_target.exit();
@@ -90,6 +91,8 @@ impl Player
             if self.pitch < -89.0 {
                 self.pitch = -89.0;
             }
+
+            
 
 
     }
