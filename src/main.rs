@@ -23,7 +23,7 @@ fn main() {
     let event_loop = glium::winit::event_loop::EventLoopBuilder::new().build().unwrap();
     let (window, display) = glium::backend::glutin::SimpleWindowBuilder::new().build(&event_loop);
 
-    let dirt_image = image::load_from_memory(include_bytes!("../textures/tnt_side.png")).unwrap().to_rgba8();
+    let dirt_image = image::load_from_memory(include_bytes!("../textures/dirt.png")).unwrap().to_rgba8();
     let image_dimensions = dirt_image.dimensions();
 
     let dirt_image = glium::texture::RawImage2d::from_raw_rgba_reversed(&dirt_image.into_raw(), image_dimensions);
