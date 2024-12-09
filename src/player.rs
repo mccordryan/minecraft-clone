@@ -32,7 +32,7 @@ impl Player
         let yaw = 0.0;
         let pitch = 0.0;
         let sensitivity = 0.1;
-        let speed = 3.0;
+        let speed = 10.0;
         let chunk_pos = ChunkManager::get_chunk_at(position.into());
         Player { camera_pos, camera_front, camera_up, yaw, pitch, sensitivity, speed, camera_offset, chunk_pos, position }
     }
@@ -69,7 +69,7 @@ impl Player
         // update chunk position
         self.chunk_pos = ChunkManager::get_chunk_at(self.position.into());
 
-        println!("Position: {:?}", self.position);
+        //println!("Position: {:?}", self.position);
         // Escape
         if keys_pressed.contains(&PhysicalKey::Code(KeyCode::Escape)) {
             window_target.exit();

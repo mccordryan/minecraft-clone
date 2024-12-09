@@ -2,7 +2,7 @@
 extern crate glium;
 use std::{collections::HashSet, time::Instant};
 
-use glium::{winit::event::{ElementState, Event, WindowEvent}, IndexBuffer, Surface, VertexBuffer};
+use glium::{winit::{event::{ElementState, Event, WindowEvent}, keyboard::{KeyCode, PhysicalKey}}, IndexBuffer, Surface, VertexBuffer};
 use nalgebra_glm::{self, Vec3};
 mod block;
 use block::{Block, Vertex};
@@ -73,12 +73,13 @@ fn main() {
 
     let program = glium::Program::from_source(&display, vertex_shader_src, fragment_shader_src, None).unwrap();
 
-    let mut player = Player::new(Vec3::new(0.0, 0.0, 0.0));
+    let mut player = Player::new(Vec3::new(0.0, 70.0, 0.0));
 
     let mut vertex_buffer: Option<VertexBuffer<Vertex>> = None;
     let mut index_buffer: Option<IndexBuffer<u32>> = None;
     let mut chunk_manager = ChunkManager::new();
     let mut last_chunk_pos: [i32; 3] = player.chunk_pos;
+    let mut do_chunk_updates = false;
 
     chunk_manager.update_chunks(player.position);
     let _ = event_loop.run(move |event, window_target| {
@@ -95,6 +96,8 @@ fn main() {
                     delta_time = current_frame.duration_since(last_frame).as_secs_f32();
                     last_frame = current_frame;
 
+                    do_chunk_updates = keys_pressed.contains(&PhysicalKey::Code(KeyCode::Backslash));
+
                     player.handle_keyboard_inputs(
                         &keys_pressed, 
                         &window_target, 
@@ -102,9 +105,9 @@ fn main() {
                     );
 
 
-                    if vertex_buffer.is_none() || index_buffer.is_none() || player.chunk_pos != last_chunk_pos {
+                    if vertex_buffer.is_none() || index_buffer.is_none() || (do_chunk_updates && player.chunk_pos != last_chunk_pos) {
                         last_chunk_pos = player.chunk_pos;
-                        // chunk_manager.update_chunks(player.position);
+                        chunk_manager.update_chunks(player.position);
                         let (vertices, indices) = chunk_manager.get_buffers();
                         vertex_buffer = Some(glium::VertexBuffer::new(&display, &vertices).unwrap());
                         index_buffer = Some(glium::IndexBuffer::new(
@@ -130,7 +133,7 @@ fn main() {
                         100.0
                     ).into();
                     // projection: [[f32; 4]; 4] = nalgebra_glm::Mat4::identity().into();
-                    target.clear_color_and_depth((0.0, 0.0, 0.0, 1.0), 1.0);
+                    target.clear_color_and_depth((120.0/255.0, 167.0/255.0, 255.0/255.0, 1.0), 1.0);
                     target.draw(
                         vertex_buffer.as_ref().unwrap(),
                         index_buffer.as_ref().unwrap(),

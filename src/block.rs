@@ -61,29 +61,24 @@ impl FaceDir {
     }
 }
 
+#[derive(Clone, Copy, Debug)]
 pub struct Block {
     pub block_type: BlockType,
     pub pos: [f32; 3],
 } 
 
-#[derive(PartialEq)]
+#[derive(PartialEq, Debug, Clone, Copy)]
 pub enum BlockType {
-        Air,
-        TNT,
-    }
+    Air,
+    TNT,
+    Grass,
+    Dirt,
+}
 
 impl Block {
    
 
-    pub fn new(pos: [f32; 3]) -> Self {
-        let block_type: BlockType;
-
-        if pos[1] > 0.0 { // y limit for now
-            block_type = BlockType::Air;
-        } else {
-            block_type = BlockType::TNT;
-        }
-        
+    pub fn new(pos: [f32; 3], block_type: BlockType) -> Self {    
         Block { block_type, pos}
     }
 
@@ -94,7 +89,7 @@ impl Block {
 
         if self.block_type == BlockType::Air {
             return (vertices, indices)
-        }
+        } 
 
         for face in faces {
             Self::add_face(&mut vertices, &mut indices, base_pos, face);
@@ -107,25 +102,24 @@ impl Block {
         let (normal, u_axis, v_axis) = face_dir.get_axes();
         let vertex_start = vertices.len() as u32;
         
-        // Calculate the starting corner position for this face
-        // Move half a block in the opposite direction of the normal
-        let corner_pos = base_pos - normal * 0.5;
+        // Move half a block in the direction of the normal instead
+        let corner_pos = base_pos + normal * 0.5;
         
-        // Generate the four corners of the face
+        // Generate corners in the opposite winding order
         let positions = [
             corner_pos - u_axis * 0.5 - v_axis * 0.5, // Bottom Left
-            corner_pos - u_axis * 0.5 + v_axis * 0.5, // Top Left
-            corner_pos + u_axis * 0.5 + v_axis * 0.5, // Top Right
             corner_pos + u_axis * 0.5 - v_axis * 0.5, // Bottom Right
+            corner_pos + u_axis * 0.5 + v_axis * 0.5, // Top Right
+            corner_pos - u_axis * 0.5 + v_axis * 0.5, // Top Left
         ];
         
         // Add vertices with texture coordinates
         for (i, pos) in positions.iter().enumerate() {
             let tex_coords = match i {
                 0 => [0.0, 0.0], // Bottom Left
-                1 => [0.0, 1.0], // Top Left
+                1 => [1.0, 0.0], // Bottom Right
                 2 => [1.0, 1.0], // Top Right
-                3 => [1.0, 0.0], // Bottom Right
+                3 => [0.0, 1.0], // Top Left
                 _ => unreachable!(),
             };
             
@@ -135,14 +129,14 @@ impl Block {
             });
         }
         
-        // Add indices for the two triangles that make up the face
+        // Update indices to match new winding order
         indices.extend_from_slice(&[
             vertex_start,     // Bottom Left
-            vertex_start + 1, // Top Left
+            vertex_start + 1, // Bottom Right
             vertex_start + 2, // Top Right
             vertex_start,     // Bottom Left
             vertex_start + 2, // Top Right
-            vertex_start + 3, // Bottom Right
+            vertex_start + 3, // Top Left
         ]);
     }
 }
