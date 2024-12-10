@@ -51,10 +51,10 @@ impl ChunkManager {
         println!("Updating chunks");
        
         let chunk_size: i32 = 16;
-        let render_distance: i32 = 2;
+        let render_distance: i32 = 3;
         
         let user_chunk_pos = ChunkManager::get_chunk_at(position.into());
-
+        println!("Locking chunks update chunks");
         let mut chunks = self.chunks.lock().unwrap();
         println!("{} chunks at beginning of update_chunks", chunks.len());
         let chunks_to_remove: Vec<[i32; 3]> = chunks.keys()
@@ -114,10 +114,11 @@ impl ChunkManager {
         let chunk_size = 16;
         // Calculate chunk origin and local coordinate
         let chunk_origin = [
-            (world_pos[0].div_euclid(chunk_size)) * chunk_size,
-            (world_pos[1].div_euclid(chunk_size)) * chunk_size,
-            (world_pos[2].div_euclid(chunk_size)) * chunk_size,
+            (world_pos[0].div_euclid(chunk_size)) ,
+            (world_pos[1].div_euclid(chunk_size)) ,
+            (world_pos[2].div_euclid(chunk_size)),
         ];
+
         
         let local_pos = [
             world_pos[0].rem_euclid(chunk_size) as usize,
@@ -232,7 +233,7 @@ impl ChunkManager {
             indices.extend(chunk_indices.iter().map(|i| i + vertex_offset));
 
             vertex_offset += chunk_vertex_offset;
-            
+
             // add to mesh map
             let chunk_mesh_data = ChunkMeshData {
                 vertices: chunk_vertices,
@@ -241,7 +242,7 @@ impl ChunkManager {
 
             self.mesh_map.insert(*origin, chunk_mesh_data);
         }
-
+        println!("get_buffers is unlocking chunks");
         (vertices, indices)
     }
 }

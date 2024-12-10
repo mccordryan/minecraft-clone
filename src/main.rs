@@ -1,6 +1,6 @@
 #[macro_use]
 extern crate glium;
-use std::{collections::HashSet, sync::mpsc, thread, time::Instant};
+use std::{collections::HashSet, sync::{mpsc, Arc, Mutex}, thread, time::Instant};
 
 use chunk::Chunk;
 use glium::{winit::{event::{ElementState, Event, WindowEvent}, keyboard::{KeyCode, PhysicalKey}}, IndexBuffer, Surface, VertexBuffer};
@@ -98,7 +98,52 @@ fn main() {
     "#;
 
     let (task_sender, task_receiver) = mpsc::channel::<WorkerMessage>();
-    let (_result_sender, result_receiver) = mpsc::channel::<WorkerMessage>();
+    let (result_sender, result_receiver) = mpsc::channel::<WorkerMessage>();
+
+
+    let program = glium::Program::from_source(&display, vertex_shader_src, fragment_shader_src, None).unwrap();
+
+    let mut player = Player::new(Vec3::new(0.0, 30.0, 0.0));
+
+    // i need to initialize these somehow
+    let mut vertex_buffer: Option<VertexBuffer<Vertex>> = None;
+    let mut index_buffer: Option<IndexBuffer<u32>> = None;
+
+    let (buffer_task_sender, buffer_task_receiver) = mpsc::channel::<BufferTask>();
+    let (buffer_result_sender, buffer_result_receiver) = mpsc::channel::<(Vec<Vertex>, Vec<u32>)>();
+    
+    // Wrap chunk_manager in Arc<Mutex>
+    let chunk_manager = Arc::new(Mutex::new(ChunkManager::new(task_sender)));
+    let chunk_manager_worker = Arc::clone(&chunk_manager);
+
+    let mut last_chunk_pos: [i32; 3] = player.chunk_pos;
+    let mut do_chunk_updates = true;
+    let mut last_chunk_count = 0;
+
+    enum BufferTask {
+        UpdateBuffers,
+        Shutdown,
+    }
+
+    let buffer_worker = thread::spawn(move || {
+        loop {
+            match buffer_task_receiver.recv() {
+                Ok(BufferTask::UpdateBuffers) => {
+                    // Lock chunk_manager to access it
+                    println!("Buffer worker is locking chunk manager");
+                    let mut chunk_manager = chunk_manager_worker.lock().unwrap();
+                    let (vertices, indices) = chunk_manager.get_buffers();
+                    buffer_result_sender.send((vertices, indices)).unwrap();
+                    println!("Buffer worker Unlocked chunk manager");
+                },
+                Ok(BufferTask::Shutdown) => {
+                    println!("Buffer worker shutting down!");
+                    break;
+                }
+                Err(_) => break
+            }
+        }
+    });
 
     let worker = thread::spawn(move || {
         loop {
@@ -107,49 +152,37 @@ fn main() {
                     // println!("Received task! generating chunk!");
                     let chunk = Chunk::new(task.origin);
                     // println!("Worker generated chunk! waiting on map to unlock...");
+                    println!("Buffer worker is locking chunk map");
                     let mut map = task.chunk_map.lock().unwrap();
-                    println!("{}", map.len());
-                    map.insert(task.origin, chunk);
+                    println!("Buffer worker Unlocked chunk map");
+                    if !map.contains_key(&task.origin) {
+                        map.insert(task.origin, chunk);
+                        buffer_task_sender.send(BufferTask::UpdateBuffers).unwrap();
+                    }
+                   
                 },
                 Ok(WorkerMessage::Shutdown) => {
                     println!("Chunk worker shutting down!");
                     break;
                 }
                 Err(_) => break
-            }
+            } 
         }
     });
 
-    // struct BufferTask {
-
-    // }
-
-    // let buffer_worker = thread::spawn(move || {
-
-    let program = glium::Program::from_source(&display, vertex_shader_src, fragment_shader_src, None).unwrap();
-
-    let mut player = Player::new(Vec3::new(0.0, 30.0, 0.0));
-
-    let mut vertex_buffer: Option<VertexBuffer<Vertex>> = None;
-    let mut index_buffer: Option<IndexBuffer<u32>> = None;
-    let mut chunk_manager = ChunkManager::new(task_sender);
-    let mut last_chunk_pos: [i32; 3] = player.chunk_pos;
-    let mut do_chunk_updates = true;
-
-    chunk_manager.update_chunks(player.position);
     let _ = event_loop.run(move |event, window_target| {
         match event { 
             Event::WindowEvent { event, .. } => match event {
                 WindowEvent::CloseRequested => {
                     window_target.exit();
-                    chunk_manager.shutdown_sender();
+                    chunk_manager.lock().unwrap().shutdown_sender();
                 },
                 WindowEvent::Resized(window_size) => {
                     display.resize(window_size.into());
                 }
                 WindowEvent::RedrawRequested => {
                     // Update time values!
-
+                    // println!("RedrawRequested");
                     let current_frame = Instant::now();
                     delta_time = current_frame.duration_since(last_frame).as_secs_f32();
                     last_frame = current_frame;
@@ -164,17 +197,27 @@ fn main() {
 
 
                     if vertex_buffer.is_none() || index_buffer.is_none() || (do_chunk_updates && player.chunk_pos != last_chunk_pos) {
-                        last_chunk_pos = player.chunk_pos;
-                       println!("calling update chunks");
+                       //println!("calling update chunks");
+                       println!("RedrawRequested is trying to lock chunk manager");
+                        let chunk_manager = chunk_manager.try_lock();
+                        if chunk_manager.is_ok() {
+                            last_chunk_pos = player.chunk_pos;
+                        let mut chunk_manager = chunk_manager.unwrap();
                         chunk_manager.update_chunks(player.position);
-                        let (vertices, indices) = chunk_manager.get_buffers();
-                        println!("Actually creating buffers");
-                        vertex_buffer = Some(glium::VertexBuffer::new(&display, &vertices).unwrap());
-                        index_buffer = Some(glium::IndexBuffer::new(
-                            &display,
-                            glium::index::PrimitiveType::TrianglesList,
-                            &indices
-                        ).unwrap());
+
+                        }
+                    }
+
+                    // look for buffer updates?
+                    if let Ok(buffer_result) = buffer_result_receiver.try_recv() {
+                        if buffer_result.0.len() > 0 {
+                            vertex_buffer = Some(glium::VertexBuffer::new(&display, &buffer_result.0).unwrap());
+                            index_buffer = Some(glium::IndexBuffer::new(
+                                &display,
+                                glium::index::PrimitiveType::TrianglesList,
+                                &buffer_result.1
+                            ).unwrap());
+                        }
                     }
 
                     let mut target = display.draw();
@@ -194,8 +237,10 @@ fn main() {
                     ).into();
                     // projection: [[f32; 4]; 4] = nalgebra_glm::Mat4::identity().into();
                     target.clear_color_and_depth((120.0/255.0, 167.0/255.0, 255.0/255.0, 1.0), 1.0);
-                    target.draw(
-                        vertex_buffer.as_ref().unwrap(),
+
+                    if vertex_buffer.is_some() && index_buffer.is_some() {
+                        target.draw(
+                            vertex_buffer.as_ref().unwrap(),
                         index_buffer.as_ref().unwrap(),
                         &program,
                         &uniform! {
@@ -204,9 +249,10 @@ fn main() {
                             projection: projection,
                             tex: dirt_texture,
                         },
-                        &draw_parameters)
-                        .unwrap();
+                            &draw_parameters)
+                            .unwrap();
 
+                    }
                     target.finish().unwrap();
                 },
                 WindowEvent::KeyboardInput {  device_id, event, is_synthetic  } => {
