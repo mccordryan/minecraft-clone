@@ -1,7 +1,8 @@
 #[macro_use]
 extern crate glium;
-use std::{collections::HashSet, time::Instant};
+use std::{collections::HashSet, sync::mpsc, thread, time::Instant};
 
+use chunk::Chunk;
 use glium::{winit::{event::{ElementState, Event, WindowEvent}, keyboard::{KeyCode, PhysicalKey}}, IndexBuffer, Surface, VertexBuffer};
 use nalgebra_glm::{self, Vec3};
 mod block;
@@ -10,7 +11,7 @@ mod player;
 use player::Player;
 mod chunk_manager;
 mod chunk;
-use chunk_manager::ChunkManager;
+use chunk_manager::{ChunkManager, WorkerMessage};
 
 fn main() {
 
@@ -45,47 +46,104 @@ fn main() {
 
 
     let vertex_shader_src = r#"
-        #version 140
+        #version 150
         in vec3 position;
         in vec2 tex_coords;
+        in vec3 normal;
+        
         out vec2 v_tex_coords;
+        out vec3 v_normal;
+        out vec3 v_position;
+        
         uniform mat4 model;
         uniform mat4 view;
         uniform mat4 projection;
         
         void main() {
             v_tex_coords = tex_coords;
+            v_normal = mat3(transpose(inverse(model))) * normal;  // Transform normal to world space
+            v_position = vec3(model * vec4(position, 1.0));
             gl_Position = projection * view * model * vec4(position, 1.0);
         }
     "#;
 
     // Update fragment shader to use texture
     let fragment_shader_src = r#"
-        #version 140
+        #version 150
         in vec2 v_tex_coords;
+        in vec3 v_normal;
+        in vec3 v_position;
+        
         out vec4 color;
         uniform sampler2D tex;
         
         void main() {
-       color = texture(tex, v_tex_coords);
+            // Light direction (pointing downward and slightly to the side)
+            vec3 light_dir = normalize(vec3(-0.2, -1.0, -0.3));
+            
+            // Ambient lighting
+            float ambient_strength = 0.3;
+            vec3 ambient = ambient_strength * vec3(1.0, 1.0, 1.0);
+            
+            // Diffuse lighting
+            vec3 norm = normalize(v_normal);
+            float diff = max(dot(norm, -light_dir), 0.0);
+            vec3 diffuse = diff * vec3(1.0, 1.0, 1.0);
+            
+            // Combine lighting with texture
+            vec4 tex_color = texture(tex, v_tex_coords);
+            vec3 result = (ambient + diffuse) * tex_color.rgb;
+            color = vec4(result, tex_color.a);
         }
     "#;
 
+    let (task_sender, task_receiver) = mpsc::channel::<WorkerMessage>();
+    let (_result_sender, result_receiver) = mpsc::channel::<WorkerMessage>();
+
+    let worker = thread::spawn(move || {
+        loop {
+            match task_receiver.recv() {
+                Ok(WorkerMessage::LoadChunkTask(task)) => {
+                    // println!("Received task! generating chunk!");
+                    let chunk = Chunk::new(task.origin);
+                    // println!("Worker generated chunk! waiting on map to unlock...");
+                    let mut map = task.chunk_map.lock().unwrap();
+                    println!("{}", map.len());
+                    map.insert(task.origin, chunk);
+                },
+                Ok(WorkerMessage::Shutdown) => {
+                    println!("Chunk worker shutting down!");
+                    break;
+                }
+                Err(_) => break
+            }
+        }
+    });
+
+    // struct BufferTask {
+
+    // }
+
+    // let buffer_worker = thread::spawn(move || {
+
     let program = glium::Program::from_source(&display, vertex_shader_src, fragment_shader_src, None).unwrap();
 
-    let mut player = Player::new(Vec3::new(0.0, 70.0, 0.0));
+    let mut player = Player::new(Vec3::new(0.0, 30.0, 0.0));
 
     let mut vertex_buffer: Option<VertexBuffer<Vertex>> = None;
     let mut index_buffer: Option<IndexBuffer<u32>> = None;
-    let mut chunk_manager = ChunkManager::new();
+    let mut chunk_manager = ChunkManager::new(task_sender);
     let mut last_chunk_pos: [i32; 3] = player.chunk_pos;
-    let mut do_chunk_updates = false;
+    let mut do_chunk_updates = true;
 
     chunk_manager.update_chunks(player.position);
     let _ = event_loop.run(move |event, window_target| {
         match event { 
             Event::WindowEvent { event, .. } => match event {
-                WindowEvent::CloseRequested => window_target.exit(),
+                WindowEvent::CloseRequested => {
+                    window_target.exit();
+                    chunk_manager.shutdown_sender();
+                },
                 WindowEvent::Resized(window_size) => {
                     display.resize(window_size.into());
                 }
@@ -96,7 +154,7 @@ fn main() {
                     delta_time = current_frame.duration_since(last_frame).as_secs_f32();
                     last_frame = current_frame;
 
-                    do_chunk_updates = keys_pressed.contains(&PhysicalKey::Code(KeyCode::Backslash));
+                    //do_chunk_updates = keys_pressed.contains(&PhysicalKey::Code(KeyCode::Backslash));
 
                     player.handle_keyboard_inputs(
                         &keys_pressed, 
@@ -107,8 +165,10 @@ fn main() {
 
                     if vertex_buffer.is_none() || index_buffer.is_none() || (do_chunk_updates && player.chunk_pos != last_chunk_pos) {
                         last_chunk_pos = player.chunk_pos;
+                       println!("calling update chunks");
                         chunk_manager.update_chunks(player.position);
                         let (vertices, indices) = chunk_manager.get_buffers();
+                        println!("Actually creating buffers");
                         vertex_buffer = Some(glium::VertexBuffer::new(&display, &vertices).unwrap());
                         index_buffer = Some(glium::IndexBuffer::new(
                             &display,
@@ -181,5 +241,6 @@ fn main() {
         }
     });
 
+worker.join().unwrap();
 
 }

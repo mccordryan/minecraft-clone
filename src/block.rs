@@ -7,8 +7,9 @@ use strum_macros::EnumIter;
 pub struct Vertex {
     position: [f32; 3],
     tex_coords: [f32; 2],
+    normal: [f32; 3],
 }
-implement_vertex!(Vertex, position, tex_coords);
+implement_vertex!(Vertex, position, tex_coords, normal);
 
 #[derive(Debug, EnumIter, PartialEq)]
 pub enum FaceDir {
@@ -113,7 +114,7 @@ impl Block {
             corner_pos - u_axis * 0.5 + v_axis * 0.5, // Top Left
         ];
         
-        // Add vertices with texture coordinates
+        // Add vertices with texture coordinates and normals
         for (i, pos) in positions.iter().enumerate() {
             let tex_coords = match i {
                 0 => [0.0, 0.0], // Bottom Left
@@ -126,6 +127,7 @@ impl Block {
             vertices.push(Vertex {
                 position: [pos.x, pos.y, pos.z],
                 tex_coords,
+                normal: [normal.x, normal.y, normal.z],
             });
         }
         
