@@ -148,58 +148,67 @@ fn main() {
         }
     });
 
-    let (pool,chunk_result_receiver) = ThreadPool::<Chunk>::new(100);
+    let (pool,chunk_result_receiver) = ThreadPool::<Chunk>::new(10);
    
     let worker = thread::spawn(move || {
         loop {
             match task_receiver.recv() {
                 Ok(WorkerMessage::LoadChunkTask(task)) => {
-                    // let's make this a thread pool
-                    println!("Worker started");
+                    println!("Worker started processing LoadChunkTask");
                     let mut chunks_to_insert: Vec<Chunk> = Vec::new();
 
                     {
-                    let mut map = task.chunk_map.write().unwrap();
+                        let mut map = task.chunk_map.write().unwrap();
+                        println!("Worker acquired write lock on chunk map");
 
-                    let num_origins = task.origins.len();
-                    for origin in task.origins {
+                        let num_origins = task.origins.len();
+                        println!("Processing {} origins", num_origins);
                         
-                        if !map.contains_key(&origin) {
-                            pool.execute(Box::new(move || {
-                                println!("Executing chunk task");
-                                let chunk = Chunk::new(origin);
-                                println!("Executed chukn task");
-                                chunk
-                            }));
-                        }
-                    }
-
-                    for _ in 0..num_origins {
-                        println!("Waiting for chunk result");
-                        match chunk_result_receiver.recv() {
-                            Ok(chunk) => {
-                                println!("Received chunk successfully");
-                                chunks_to_insert.push(chunk);
+                        for (i, origin) in task.origins.iter().enumerate() {
+                            let origin = *origin;  // Clone the origin before moving into closure
+                            if !map.contains_key(&origin) {
+                                println!("Sending task to pool for origin {:?}", origin);
+                                pool.execute(Box::new(move || {
+                                    println!("Starting chunk generation for origin {:?}", origin);
+                                    let chunk = Chunk::new(origin);
+                                    println!("Finished chunk generation for origin {:?}", origin);
+                                    chunk
+                                }));
                             }
-                            Err(e) => println!("Failed to receive chunk: {:?}", e),
+                        }
+
+                        println!("All tasks sent to pool, waiting for results");
+                        for i in 0..num_origins {
+                            println!("Waiting for chunk result #{}/{}", i+1, num_origins);
+                            match chunk_result_receiver.recv() {
+                                Ok(chunk) => {
+                                    println!("Successfully received chunk #{} for origin {:?}", i+1, chunk.origin);
+                                    chunks_to_insert.push(chunk);
+                                }
+                                Err(e) => println!("Failed to receive chunk #{}: {:?}", i+1, e),
+                            }
+                        }
+                        
+                        println!("Received all chunks, inserting into map");
+                        for chunk in chunks_to_insert {
+                            map.insert(chunk.origin, chunk);
                         }
                     }
-                   println!("Done waiting for chunks"); 
-                   // insert chunks into map
-                   for chunk in chunks_to_insert {
-                    map.insert(chunk.origin, chunk);
-                   }
-                }
-                   // somehow need to switch to just read access on the chunk map i think ? 
-                     let map = task.chunk_map.read().unwrap();
+                    
+                    println!("Worker releasing write lock on chunk map");
+                    let map = task.chunk_map.read().unwrap();
+                    println!("Worker acquired read lock for sending to buffer task");
                     buffer_task_sender.send(BufferTask::UpdateBuffers(map.clone(), mesh_map.clone())).unwrap();
-                    println!("Unlocked chunk map in worker");
+                    println!("Worker sent buffer task");
                 },
                 Ok(WorkerMessage::Shutdown) => {
-                    println!("Chunk worker shutting down!");
+                    println!("Chunk worker received shutdown signal");
                     break;
                 }
-                Err(_) => break
+                Err(e) => {
+                    println!("Chunk worker error receiving task: {:?}", e);
+                    break;
+                }
             } 
         }
     });

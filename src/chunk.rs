@@ -7,7 +7,7 @@ use crate::block::{Block, BlockType};
 #[derive(Clone, Copy)]
 pub struct Chunk {
     pub blocks: [[[Block; 16]; 16]; 16],
-    pub origin: [i32; 3], // front bottom left of cubic 16x16x16 chunk ? 
+    pub origin: [i32; 3],
 }
 
 
