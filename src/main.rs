@@ -148,7 +148,7 @@ fn main() {
         }
     });
 
-    let pool = ThreadPool::new(8);
+    let pool = ThreadPool::new(100);
    
     let worker = thread::spawn(move || {
         loop {
@@ -161,24 +161,27 @@ fn main() {
                         let mut map = task.chunk_map.write().unwrap();
                         let mut num_jobs = 0;
 
-                        let (tx, rx) = channel();
+                        let (tx, rx) = channel::<Arc<Chunk>>();
 
                         for (i, origin) in task.origins.iter().enumerate() {
-                            let origin = *origin;  // Clone the origin before moving into closure
+                            let origin = *origin;
                             if !map.contains_key(&origin) {
                                 num_jobs += 1;
                                 let tx = tx.clone();
                                 pool.execute(move || {
                                     let chunk = Chunk::new(origin);
-                                    tx.send(chunk).expect("Failed to send chunk");
+                                    tx.send(Arc::new(chunk)).expect("Failed to send chunk");
                                 });
                             }
                         }
 
+                        drop(tx);
+
+                        let mut chunks_to_insert = Vec::with_capacity(num_jobs);
                         for i in 0..num_jobs {
                             match rx.recv() {
                                 Ok(chunk) => {
-                                    chunks_to_insert.push(chunk);
+                                    chunks_to_insert.push((*chunk).clone());
                                 }
                                 Err(e) => println!("Failed to receive chunk #{}: {:?}", i+1, e),
                             }

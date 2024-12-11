@@ -50,7 +50,7 @@ impl ChunkManager {
         println!("Updating chunks");
        
         let chunk_size: i32 = 16;
-        let render_distance: i32 = 3;
+        let render_distance: i32 = 8;
         
         let user_chunk_pos = ChunkManager::get_chunk_at(position.into());
         println!("Locking chunks update chunks");

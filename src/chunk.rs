@@ -4,7 +4,7 @@ use noise::{Fbm, MultiFractal, NoiseFn, Perlin};
 
 use crate::block::{Block, BlockType};
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub struct Chunk {
     pub blocks: [[[Block; 16]; 16]; 16],
     pub origin: [i32; 3],
