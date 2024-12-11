@@ -1,6 +1,6 @@
 #[macro_use]
 extern crate glium;
-use std::{collections::{HashMap, HashSet}, sync::{mpsc, Arc, Mutex, RwLock}, thread, time::Instant};
+use std::{collections::{HashMap, HashSet}, sync::{mpsc::{self, channel}, Arc, Mutex, RwLock}, thread, time::Instant};
 
 use chunk::Chunk;
 use glium::{winit::{event::{ElementState, Event, WindowEvent}, keyboard::{KeyCode, PhysicalKey}}, IndexBuffer, Surface, VertexBuffer};
@@ -12,8 +12,8 @@ use player::Player;
 mod chunk_manager;
 mod chunk;
 use chunk_manager::{ChunkManager, ChunkMeshData, WorkerMessage};
-mod threadpool;
 use threadpool::ThreadPool;
+
 fn main() {
 
     let mut delta_time: f32 = 0.0;
@@ -148,41 +148,36 @@ fn main() {
         }
     });
 
-    let (pool,chunk_result_receiver) = ThreadPool::<Chunk>::new(10);
+    let pool = ThreadPool::new(8);
    
     let worker = thread::spawn(move || {
         loop {
             match task_receiver.recv() {
                 Ok(WorkerMessage::LoadChunkTask(task)) => {
-                    println!("Worker started processing LoadChunkTask");
+
                     let mut chunks_to_insert: Vec<Chunk> = Vec::new();
 
                     {
                         let mut map = task.chunk_map.write().unwrap();
-                        println!("Worker acquired write lock on chunk map");
+                        let mut num_jobs = 0;
 
-                        let num_origins = task.origins.len();
-                        println!("Processing {} origins", num_origins);
-                        
+                        let (tx, rx) = channel();
+
                         for (i, origin) in task.origins.iter().enumerate() {
                             let origin = *origin;  // Clone the origin before moving into closure
                             if !map.contains_key(&origin) {
-                                println!("Sending task to pool for origin {:?}", origin);
-                                pool.execute(Box::new(move || {
-                                    println!("Starting chunk generation for origin {:?}", origin);
+                                num_jobs += 1;
+                                let tx = tx.clone();
+                                pool.execute(move || {
                                     let chunk = Chunk::new(origin);
-                                    println!("Finished chunk generation for origin {:?}", origin);
-                                    chunk
-                                }));
+                                    tx.send(chunk).expect("Failed to send chunk");
+                                });
                             }
                         }
 
-                        println!("All tasks sent to pool, waiting for results");
-                        for i in 0..num_origins {
-                            println!("Waiting for chunk result #{}/{}", i+1, num_origins);
-                            match chunk_result_receiver.recv() {
+                        for i in 0..num_jobs {
+                            match rx.recv() {
                                 Ok(chunk) => {
-                                    println!("Successfully received chunk #{} for origin {:?}", i+1, chunk.origin);
                                     chunks_to_insert.push(chunk);
                                 }
                                 Err(e) => println!("Failed to receive chunk #{}: {:?}", i+1, e),
