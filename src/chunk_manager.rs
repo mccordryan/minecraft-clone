@@ -1,11 +1,10 @@
-use std::{collections::{HashMap, HashSet}, sync::{mpsc::Sender, Arc, Mutex, MutexGuard}};
+use std::{collections::{HashMap, HashSet}, sync::{mpsc::Sender, Arc, Mutex, MutexGuard, RwLock, RwLockReadGuard}};
 use nalgebra_glm::Vec3;
 use crate::{block::{Block, BlockType, FaceDir, Vertex}, chunk::Chunk};
 
 pub struct ChunkManager {
-    pub chunks: Arc<Mutex<HashMap<[i32; 3], Chunk>>>,
+    pub chunks: Arc<RwLock<HashMap<[i32; 3], Chunk>>>,
     pub task_sender: Sender<WorkerMessage>,
-    pub mesh_map: HashMap<[i32; 3], ChunkMeshData>,
 }
 
 pub struct ChunkMeshData {
@@ -14,8 +13,9 @@ pub struct ChunkMeshData {
 }
 
 pub struct LoadChunkTask {
-    pub origin: [i32; 3],
-    pub chunk_map: Arc<Mutex<HashMap<[i32; 3], Chunk>>>,
+    pub origins: Vec<[i32;3]>,
+    pub chunk_map: Arc<RwLock<HashMap<[i32; 3], Chunk>>>,
+    pub mesh_map:  Arc<RwLock<HashMap<[i32; 3], ChunkMeshData>>>,
 }
 
 pub enum WorkerMessage {
@@ -26,9 +26,8 @@ pub enum WorkerMessage {
 impl ChunkManager {
     pub fn new(task_sender: Sender<WorkerMessage>) -> Self {
         ChunkManager {
-            chunks: Arc::new(Mutex::new(HashMap::new())),
+            chunks: Arc::new(RwLock::new(HashMap::new())),
             task_sender,
-            mesh_map: HashMap::new(),
         }
     }
 
@@ -47,7 +46,7 @@ impl ChunkManager {
 
 
 
-    pub fn update_chunks(&mut self, position: Vec3) {
+    pub fn update_chunks(&mut self, position: Vec3, mesh_map: Arc<RwLock<HashMap<[i32; 3], ChunkMeshData>>>) {
         println!("Updating chunks");
        
         let chunk_size: i32 = 16;
@@ -55,7 +54,12 @@ impl ChunkManager {
         
         let user_chunk_pos = ChunkManager::get_chunk_at(position.into());
         println!("Locking chunks update chunks");
-        let mut chunks = self.chunks.lock().unwrap();
+        let mut chunks = match self.chunks.try_write() {
+            Ok(chunks) => chunks,
+            Err(_) => {//need to break out of the function
+                return;
+             }
+        };
         println!("{} chunks at beginning of update_chunks", chunks.len());
         let chunks_to_remove: Vec<[i32; 3]> = chunks.keys()
             .filter(|&key| !ChunkManager::chunk_in_range(*key, user_chunk_pos, render_distance))
@@ -75,7 +79,9 @@ impl ChunkManager {
         println!("{} existing chunks identified", existing_chunks.len());
 
         drop(chunks);
-        let mut chunk_tasks: i32 = 0;
+
+
+        let mut chunks_to_load: Vec<[i32;3]> = Vec::new();
 
         for x in (user_chunk_pos[0] - render_distance)..(user_chunk_pos[0] + render_distance ) {
             for y in (user_chunk_pos[1] - render_distance)..(user_chunk_pos[1] + render_distance) {
@@ -84,20 +90,18 @@ impl ChunkManager {
                     if ChunkManager::chunk_in_range(chunk_pos, user_chunk_pos, render_distance) {
                         let origin = [x,y,z];
                         if !existing_chunks.contains(&origin) {
-                            // send a task to the worker to insert this chunk asynchronously
-                            // println!("Sending a chunk task");
-                            chunk_tasks += 1;
-                            self.task_sender.send(WorkerMessage::LoadChunkTask(LoadChunkTask{
-                                origin,
-                                chunk_map: self.chunks.clone()
-                            })
-                        ).unwrap();
+                            chunks_to_load.push(origin);
                         }
                     }
                 }
             }
         }
-        println!("generated {} tasks", chunk_tasks);
+        println!("generated {} tasks", chunks_to_load.len());
+        self.task_sender.send(WorkerMessage::LoadChunkTask(LoadChunkTask{
+            origins: chunks_to_load,
+            chunk_map: self.chunks.clone(),
+            mesh_map,
+        })).unwrap();
     }
 
 
@@ -110,7 +114,7 @@ impl ChunkManager {
         ]
     }
     
-    fn get_block(&self, world_pos: [i32; 3], chunks: &MutexGuard<HashMap<[i32; 3], Chunk>>) -> Option<Block> {
+    fn get_block( world_pos: [i32; 3], chunks: &HashMap<[i32; 3], Chunk>) -> Option<Block> {
         let chunk_size = 16;
         // Calculate chunk origin and local coordinate
         let chunk_origin = [
@@ -131,17 +135,15 @@ impl ChunkManager {
             .map(|chunk| &chunk.blocks[local_pos[0]][local_pos[1]][local_pos[2]]).copied()
     }
 
-    fn should_render_face(&self, neighbor_pos: [i32; 3], block: &Block, chunks: &MutexGuard<HashMap<[i32;3], Chunk>>) -> bool {
-        if let Some(neighbor) = self.get_block(neighbor_pos, chunks) {
+    fn should_render_face( neighbor_pos: [i32; 3], block: &Block, chunks: &HashMap<[i32;3], Chunk>) -> bool {
+        if let Some(neighbor) = ChunkManager::get_block(neighbor_pos, chunks) {
             if neighbor.block_type != BlockType::Air{
             //println!("Neighbor: {:?}\n Self: {:?}", neighbor, block);
             }
              neighbor.block_type == BlockType::Air
         } else {
-            // Convert i32 array to f32 array manually
-            //let pos_f32 = [neighbor_pos[0] as f32, neighbor_pos[1] as f32, neighbor_pos[2] as f32];
-            //println!("Neighbor Position: {:?}, Neighbor Chunk: {:?}", neighbor_pos, ChunkManager::get_chunk_at(pos_f32));
-            true
+           // show faces at chunk borders?
+            false
         }
     }
 
@@ -149,13 +151,15 @@ impl ChunkManager {
         self.task_sender.send(WorkerMessage::Shutdown).unwrap();
     }
 
-    pub fn get_buffers(&mut self) -> (Vec<Vertex>, Vec<u32> ) {
+    pub fn get_buffers(chunks: HashMap<[i32; 3], Chunk>, mesh_map: Arc<RwLock<HashMap<[i32;3], ChunkMeshData>>>) -> (Vec<Vertex>, Vec<u32> ) {
+
+        let mut mesh_map = mesh_map.write().unwrap();
+
         let mut vertices: Vec<Vertex> = Vec::new();
         let mut indices: Vec<u32> = Vec::new();
         let mut vertex_offset: u32 = 0;
 
         println!("get_buffers is locking chunks");
-        let chunks = self.chunks.lock().unwrap();
 
         for (origin, chunk) in chunks.iter() {
 
@@ -163,8 +167,8 @@ impl ChunkManager {
             let mut chunk_indices: Vec<u32> = Vec::new();
             let mut chunk_vertices: Vec<Vertex> = Vec::new();
 
-            if self.mesh_map.contains_key(origin){
-                let chunk_mesh_data = self.mesh_map.get(origin).unwrap();
+            if mesh_map.contains_key(origin){
+                let chunk_mesh_data = mesh_map.get(origin).unwrap();
                 vertices.extend(chunk_mesh_data.vertices.clone());
                 indices.extend(chunk_mesh_data.indices.iter().map(|i| i + vertex_offset));
                 vertex_offset += chunk_mesh_data.vertices.len() as u32;
@@ -190,28 +194,28 @@ impl ChunkManager {
                         let mut faces_to_render = Vec::new();
                         
                         // Up face (checking above)
-                        if self.should_render_face([world_x, world_y + 1, world_z], &block, &chunks) {
+                        if ChunkManager::should_render_face([world_x, world_y + 1, world_z], &block, &chunks) {
                             faces_to_render.push(FaceDir::Up); 
                         }
                         // Down face (checking below)
-                        if self.should_render_face([world_x, world_y - 1, world_z], &block, &chunks) {
+                        if ChunkManager::should_render_face([world_x, world_y - 1, world_z], &block, &chunks) {
                             faces_to_render.push(FaceDir::Down); 
                         }
                         // Right face (now Left)
-                        if self.should_render_face([world_x - 1, world_y, world_z], &block, &chunks) {
+                        if ChunkManager::should_render_face([world_x - 1, world_y, world_z], &block, &chunks) {
                             faces_to_render.push(FaceDir::Left);
                         }
                         // Left face (now Right)
-                        if self.should_render_face([world_x + 1, world_y, world_z], &block, &chunks) {
+                        if ChunkManager::should_render_face([world_x + 1, world_y, world_z], &block, &chunks) {
                             faces_to_render.push(FaceDir::Right);
                         }
                         // Front face
-                        if self.should_render_face([world_x, world_y, world_z - 1], &block, &chunks) {
+                        if ChunkManager::should_render_face([world_x, world_y, world_z - 1], &block, &chunks) {
                             // println!("{} {} {}", world_x, world_y, world_z);
                             faces_to_render.push(FaceDir::Front);
                         }
                         // Back face
-                        if self.should_render_face([world_x, world_y, world_z + 1], &block, &chunks) {
+                        if ChunkManager::should_render_face([world_x, world_y, world_z + 1], &block, &chunks) {
                             faces_to_render.push(FaceDir::Back);
                         }
 
@@ -240,7 +244,7 @@ impl ChunkManager {
                 indices: chunk_indices,
             };
 
-            self.mesh_map.insert(*origin, chunk_mesh_data);
+            mesh_map.insert(*origin, chunk_mesh_data);
         }
         println!("get_buffers is unlocking chunks");
         (vertices, indices)

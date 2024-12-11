@@ -1,6 +1,6 @@
 #[macro_use]
 extern crate glium;
-use std::{collections::HashSet, sync::{mpsc, Arc, Mutex}, thread, time::Instant};
+use std::{collections::{HashMap, HashSet}, sync::{mpsc, Arc, Mutex, RwLock}, thread, time::Instant};
 
 use chunk::Chunk;
 use glium::{winit::{event::{ElementState, Event, WindowEvent}, keyboard::{KeyCode, PhysicalKey}}, IndexBuffer, Surface, VertexBuffer};
@@ -11,7 +11,7 @@ mod player;
 use player::Player;
 mod chunk_manager;
 mod chunk;
-use chunk_manager::{ChunkManager, WorkerMessage};
+use chunk_manager::{ChunkManager, ChunkMeshData, WorkerMessage};
 
 fn main() {
 
@@ -113,29 +113,31 @@ fn main() {
     let (buffer_result_sender, buffer_result_receiver) = mpsc::channel::<(Vec<Vertex>, Vec<u32>)>();
     
     // Wrap chunk_manager in Arc<Mutex>
-    let chunk_manager = Arc::new(Mutex::new(ChunkManager::new(task_sender)));
-    let chunk_manager_worker = Arc::clone(&chunk_manager);
+    let mut chunk_manager = ChunkManager::new(task_sender);
 
+    let mesh_map: Arc<RwLock<HashMap<[i32; 3], ChunkMeshData>>> = Arc::new(RwLock::new(HashMap::new()));
+
+    let mesh_map_clone = mesh_map.clone();
     let mut last_chunk_pos: [i32; 3] = player.chunk_pos;
     let mut do_chunk_updates = true;
     let mut last_chunk_count = 0;
+    let mut initial_chunks_requested = false;
 
     enum BufferTask {
-        UpdateBuffers,
+        // pass a PIT clone of the chunk map and the mesh map
+        UpdateBuffers(HashMap<[i32; 3], Chunk>, Arc<RwLock<HashMap<[i32; 3], ChunkMeshData>>>),
         Shutdown,
     }
 
     let buffer_worker = thread::spawn(move || {
         loop {
             match buffer_task_receiver.recv() {
-                Ok(BufferTask::UpdateBuffers) => {
-                    // Lock chunk_manager to access it
-                    println!("Buffer worker is locking chunk manager");
-                    let mut chunk_manager = chunk_manager_worker.lock().unwrap();
-                    let (vertices, indices) = chunk_manager.get_buffers();
+                Ok(BufferTask::UpdateBuffers(chunk_map, mesh_map)) => {
+                    println!("Buffer worker received update buffers");
+                    let (vertices, indices) = ChunkManager::get_buffers(chunk_map, mesh_map.clone());
                     buffer_result_sender.send((vertices, indices)).unwrap();
                     println!("Buffer worker Unlocked chunk manager");
-                },
+                }
                 Ok(BufferTask::Shutdown) => {
                     println!("Buffer worker shutting down!");
                     break;
@@ -150,16 +152,28 @@ fn main() {
             match task_receiver.recv() {
                 Ok(WorkerMessage::LoadChunkTask(task)) => {
                     // println!("Received task! generating chunk!");
-                    let chunk = Chunk::new(task.origin);
-                    // println!("Worker generated chunk! waiting on map to unlock...");
-                    println!("Buffer worker is locking chunk map");
-                    let mut map = task.chunk_map.lock().unwrap();
-                    println!("Buffer worker Unlocked chunk map");
-                    if !map.contains_key(&task.origin) {
-                        map.insert(task.origin, chunk);
-                        buffer_task_sender.send(BufferTask::UpdateBuffers).unwrap();
+                    let mut chunks_to_insert: Vec<Chunk> = Vec::new();
+                    println!("locking chunk map in worker");
+                    {
+                    let mut map = task.chunk_map.write().unwrap();
+                    for origin in task.origins {
+                        if !map.contains_key(&origin) {
+                            let chunk = Chunk::new(origin);
+                            chunks_to_insert.push(chunk);
+                        }
                     }
+
                    
+                    
+                   // insert chunks into map
+                   for chunk in chunks_to_insert {
+                    map.insert(chunk.origin, chunk);
+                   }
+                }
+                   // somehow need to switch to just read access on the chunk map i think ? 
+                     let map = task.chunk_map.read().unwrap();
+                    buffer_task_sender.send(BufferTask::UpdateBuffers(map.clone(), mesh_map.clone())).unwrap();
+                    println!("Unlocked chunk map in worker");
                 },
                 Ok(WorkerMessage::Shutdown) => {
                     println!("Chunk worker shutting down!");
@@ -170,12 +184,13 @@ fn main() {
         }
     });
 
+
     let _ = event_loop.run(move |event, window_target| {
         match event { 
             Event::WindowEvent { event, .. } => match event {
                 WindowEvent::CloseRequested => {
                     window_target.exit();
-                    chunk_manager.lock().unwrap().shutdown_sender();
+                    chunk_manager.shutdown_sender();
                 },
                 WindowEvent::Resized(window_size) => {
                     display.resize(window_size.into());
@@ -196,16 +211,13 @@ fn main() {
                     );
 
 
-                    if vertex_buffer.is_none() || index_buffer.is_none() || (do_chunk_updates && player.chunk_pos != last_chunk_pos) {
+                    if ((vertex_buffer.is_none() || index_buffer.is_none()) && !initial_chunks_requested) || (do_chunk_updates && player.chunk_pos != last_chunk_pos) {
                        //println!("calling update chunks");
+                       last_chunk_pos = player.chunk_pos;
                        println!("RedrawRequested is trying to lock chunk manager");
-                        let chunk_manager = chunk_manager.try_lock();
-                        if chunk_manager.is_ok() {
-                            last_chunk_pos = player.chunk_pos;
-                        let mut chunk_manager = chunk_manager.unwrap();
-                        chunk_manager.update_chunks(player.position);
+                        initial_chunks_requested = true;
+                        chunk_manager.update_chunks(player.position, mesh_map_clone.clone());
 
-                        }
                     }
 
                     // look for buffer updates?
