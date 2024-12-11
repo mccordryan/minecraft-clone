@@ -50,7 +50,7 @@ impl ChunkManager {
         println!("Updating chunks");
        
         let chunk_size: i32 = 16;
-        let render_distance: i32 = 8;
+        let render_distance: i32 = 3;
         
         let user_chunk_pos = ChunkManager::get_chunk_at(position.into());
         println!("Locking chunks update chunks");
@@ -96,6 +96,24 @@ impl ChunkManager {
                 }
             }
         }
+
+        // Sort chunks by distance to user_chunk_pos
+        chunks_to_load.sort_by(|a, b| {
+            let dist_a = (
+                (a[0] - user_chunk_pos[0]).pow(2) +
+                (a[1] - user_chunk_pos[1]).pow(2) +
+                (a[2] - user_chunk_pos[2]).pow(2)
+            ) as f32;
+            
+            let dist_b = (
+                (b[0] - user_chunk_pos[0]).pow(2) +
+                (b[1] - user_chunk_pos[1]).pow(2) +
+                (b[2] - user_chunk_pos[2]).pow(2)
+            ) as f32;
+
+            dist_a.partial_cmp(&dist_b).unwrap()
+        });
+
         println!("generated {} tasks", chunks_to_load.len());
         self.task_sender.send(WorkerMessage::LoadChunkTask(LoadChunkTask{
             origins: chunks_to_load,
@@ -143,7 +161,7 @@ impl ChunkManager {
              neighbor.block_type == BlockType::Air
         } else {
            // show faces at chunk borders?
-            false
+            true // reminder you have to do this atm to prevent weird behavior
         }
     }
 

@@ -148,55 +148,58 @@ fn main() {
         }
     });
 
-    let pool = ThreadPool::new(100);
+    let pool = ThreadPool::new(8);
    
     let worker = thread::spawn(move || {
         loop {
             match task_receiver.recv() {
                 Ok(WorkerMessage::LoadChunkTask(task)) => {
 
-                    let mut chunks_to_insert: Vec<Chunk> = Vec::new();
+                    let mut chunks_to_process: Vec<[i32; 3]> = Vec::new();
 
+                        let mut num_jobs = 0;
                     {
                         let mut map = task.chunk_map.write().unwrap();
-                        let mut num_jobs = 0;
+                        
 
-                        let (tx, rx) = channel::<Arc<Chunk>>();
 
                         for (i, origin) in task.origins.iter().enumerate() {
                             let origin = *origin;
                             if !map.contains_key(&origin) {
                                 num_jobs += 1;
-                                let tx = tx.clone();
-                                pool.execute(move || {
-                                    let chunk = Chunk::new(origin);
-                                    tx.send(Arc::new(chunk)).expect("Failed to send chunk");
-                                });
+                                chunks_to_process.push(origin);
                             }
                         }
+                    }
 
+
+                        let (tx, rx) = channel::<Arc<Chunk>>();
+                        let tx = tx.clone();
+                        for origin in chunks_to_process {
+                            let tx = tx.clone();
+                            pool.execute(move ||  {
+                                let chunk = Chunk::new(origin);
+                                tx.send(Arc::new(chunk)).expect("Failed to send chunk");
+                            });
+                        }
                         drop(tx);
 
-                        let mut chunks_to_insert = Vec::with_capacity(num_jobs);
                         for i in 0..num_jobs {
                             match rx.recv() {
                                 Ok(chunk) => {
-                                    chunks_to_insert.push((*chunk).clone());
+                                    let mut map = task.chunk_map.write().unwrap();
+                                    map.insert(chunk.origin, (*chunk).clone());
+                                    buffer_task_sender.send(BufferTask::UpdateBuffers(map.clone(), mesh_map.clone())).unwrap()
                                 }
                                 Err(e) => println!("Failed to receive chunk #{}: {:?}", i+1, e),
                             }
                         }
-                        
-                        println!("Received all chunks, inserting into map");
-                        for chunk in chunks_to_insert {
-                            map.insert(chunk.origin, chunk);
-                        }
-                    }
+                    
                     
                     println!("Worker releasing write lock on chunk map");
-                    let map = task.chunk_map.read().unwrap();
+                   // let map = task.chunk_map.read().unwrap();
                     println!("Worker acquired read lock for sending to buffer task");
-                    buffer_task_sender.send(BufferTask::UpdateBuffers(map.clone(), mesh_map.clone())).unwrap();
+                    //buffer_task_sender.send(BufferTask::UpdateBuffers(map.clone(), mesh_map.clone())).unwrap();
                     println!("Worker sent buffer task");
                 },
                 Ok(WorkerMessage::Shutdown) => {
