@@ -12,7 +12,8 @@ use player::Player;
 mod chunk_manager;
 mod chunk;
 use chunk_manager::{ChunkManager, ChunkMeshData, WorkerMessage};
-
+mod threadpool;
+use threadpool::ThreadPool;
 fn main() {
 
     let mut delta_time: f32 = 0.0;
@@ -147,24 +148,43 @@ fn main() {
         }
     });
 
+    let (pool,chunk_result_receiver) = ThreadPool::<Chunk>::new(100);
+   
     let worker = thread::spawn(move || {
         loop {
             match task_receiver.recv() {
                 Ok(WorkerMessage::LoadChunkTask(task)) => {
-                    // println!("Received task! generating chunk!");
+                    // let's make this a thread pool
+                    println!("Worker started");
                     let mut chunks_to_insert: Vec<Chunk> = Vec::new();
-                    println!("locking chunk map in worker");
+
                     {
                     let mut map = task.chunk_map.write().unwrap();
+
+                    let num_origins = task.origins.len();
                     for origin in task.origins {
+                        
                         if !map.contains_key(&origin) {
-                            let chunk = Chunk::new(origin);
-                            chunks_to_insert.push(chunk);
+                            pool.execute(Box::new(move || {
+                                println!("Executing chunk task");
+                                let chunk = Chunk::new(origin);
+                                println!("Executed chukn task");
+                                chunk
+                            }));
                         }
                     }
 
-                   
-                    
+                    for _ in 0..num_origins {
+                        println!("Waiting for chunk result");
+                        match chunk_result_receiver.recv() {
+                            Ok(chunk) => {
+                                println!("Received chunk successfully");
+                                chunks_to_insert.push(chunk);
+                            }
+                            Err(e) => println!("Failed to receive chunk: {:?}", e),
+                        }
+                    }
+                   println!("Done waiting for chunks"); 
                    // insert chunks into map
                    for chunk in chunks_to_insert {
                     map.insert(chunk.origin, chunk);
